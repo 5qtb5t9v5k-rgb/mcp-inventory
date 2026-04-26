@@ -1,9 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { config } from "../config.js";
-import { getDb, getImportMetadata } from "../sources/apple-health/cache.js";
-import { listRecordTypes, listWorkoutTypes, aggregateRecords } from "../sources/apple-health/query.js";
 import { OuraClient } from "../sources/oura/client.js";
+import { StravaClient } from "../sources/strava/client.js";
+import type { StravaActivitySummary, StravaStats } from "../sources/strava/types.js";
 import { defaultDateRange } from "../utils/dates.js";
 
 function textResult(data: unknown, isError = false) {
@@ -25,45 +25,90 @@ const OURA_DATA_TYPES = [
   "personal_info",
 ];
 
+const STRAVA_DATA_TYPES = [
+  "activities",
+  "activity_detail",
+  "activity_streams",
+  "athlete_stats",
+  "zones",
+  "gear",
+  "athlete",
+];
+
+/**
+ * Load Apple Health modules lazily so better-sqlite3 / sax never load
+ * unless APPLE_HEALTH_ENABLED=true.
+ */
+async function loadAppleHealth() {
+  if (!config.appleHealthEnabled) return null;
+  const [cache, query] = await Promise.all([
+    import("../sources/apple-health/cache.js"),
+    import("../sources/apple-health/query.js"),
+  ]);
+  return { ...cache, ...query };
+}
+
+function hasStravaCreds(): boolean {
+  return !!(config.stravaClientId && config.stravaClientSecret && config.stravaRefreshToken);
+}
+
 export function registerSummaryTools(server: McpServer): void {
   server.tool(
     "list_data_types",
-    "List all available data types from Oura and/or Apple Health",
+    "List all available data types from Oura, Strava, and optionally Apple Health.",
     {
       source: z
-        .enum(["oura", "apple_health", "all"])
+        .enum(["oura", "strava", "apple_health", "all"])
         .optional()
         .describe("Filter by source (default: all)"),
     },
     async ({ source }) => {
       const result: Record<string, unknown> = {};
-      const filterSource = source ?? "all";
+      const filter = source ?? "all";
 
-      if (filterSource === "oura" || filterSource === "all") {
+      if (filter === "oura" || filter === "all") {
         result.oura = {
           configured: !!config.ouraToken,
           data_types: OURA_DATA_TYPES,
         };
       }
 
-      if (filterSource === "apple_health" || filterSource === "all") {
-        try {
-          const db = getDb();
-          const meta = getImportMetadata(db);
-          const recordTypes = listRecordTypes(db);
-          const workoutTypes = listWorkoutTypes(db);
+      if (filter === "strava" || filter === "all") {
+        result.strava = {
+          configured: hasStravaCreds(),
+          data_types: STRAVA_DATA_TYPES,
+        };
+      }
+
+      if (filter === "apple_health" || filter === "all") {
+        if (!config.appleHealthEnabled) {
           result.apple_health = {
-            imported: !!meta,
-            import_date: meta?.import_date ?? null,
-            record_count: meta?.record_count ?? 0,
-            record_types: recordTypes,
-            workout_types: workoutTypes,
+            enabled: false,
+            message: "Apple Health is disabled. Set APPLE_HEALTH_ENABLED=true to enable (local use only).",
           };
-        } catch {
-          result.apple_health = {
-            imported: false,
-            message: "Run apple_health_import first to load data.",
-          };
+        } else {
+          try {
+            const ah = await loadAppleHealth();
+            if (!ah) throw new Error("not loaded");
+            const db = ah.getDb();
+            const meta = ah.getImportMetadata(db);
+            const recordTypes = ah.listRecordTypes(db);
+            const workoutTypes = ah.listWorkoutTypes(db);
+            result.apple_health = {
+              enabled: true,
+              imported: !!meta,
+              import_date: meta?.import_date ?? null,
+              record_count: meta?.record_count ?? 0,
+              record_types: recordTypes,
+              workout_types: workoutTypes,
+            };
+          } catch {
+            result.apple_health = {
+              enabled: true,
+              imported: false,
+              message: "Run apple_health_import first to load data.",
+            };
+          }
         }
       }
 
@@ -73,7 +118,7 @@ export function registerSummaryTools(server: McpServer): void {
 
   server.tool(
     "health_summary",
-    "Get a combined health summary from both Oura and Apple Health for a date range",
+    "Get a combined health summary from Oura, Strava, and (optionally) Apple Health for a date range.",
     {
       start_date: z.string().optional().describe("Start date (YYYY-MM-DD). Defaults to 7 days ago."),
       end_date: z.string().optional().describe("End date (YYYY-MM-DD). Defaults to today."),
@@ -82,7 +127,7 @@ export function registerSummaryTools(server: McpServer): void {
       const { start_date: s, end_date: e } = defaultDateRange(start_date, end_date);
       const summary: Record<string, unknown> = { period: { start: s, end: e } };
 
-      // Oura data
+      // Oura
       if (config.ouraToken) {
         const client = new OuraClient(config.ouraToken, config.ouraBaseUrl);
         try {
@@ -106,7 +151,7 @@ export function registerSummaryTools(server: McpServer): void {
             } : null,
             activity: activityScores.length > 0 ? {
               avg_score: Math.round(activityScores.reduce((a, b) => a + b, 0) / activityScores.length),
-              avg_steps: Math.round(steps.reduce((a, b) => a + b, 0) / steps.length),
+              avg_steps: steps.length > 0 ? Math.round(steps.reduce((a, b) => a + b, 0) / steps.length) : null,
               total_steps: steps.reduce((a, b) => a + b, 0),
             } : null,
             readiness: readinessScores.length > 0 ? {
@@ -120,40 +165,76 @@ export function registerSummaryTools(server: McpServer): void {
         }
       }
 
-      // Apple Health data
-      try {
-        const db = getDb();
-        const stepData = aggregateRecords(db, {
-          recordType: "HKQuantityTypeIdentifierStepCount",
-          startDate: s,
-          endDate: e,
-          aggregation: "daily",
-        });
-
-        const hrData = aggregateRecords(db, {
-          recordType: "HKQuantityTypeIdentifierHeartRate",
-          startDate: s,
-          endDate: e,
-          aggregation: "daily",
-        });
-
-        if (stepData.length > 0 || hrData.length > 0) {
-          summary.apple_health = {
-            steps: stepData.length > 0 ? {
-              days: stepData.length,
-              avg_daily: Math.round(stepData.reduce((a, b) => a + b.avg * b.count, 0) / stepData.length),
-              total: Math.round(stepData.reduce((a, b) => a + b.avg * b.count, 0)),
-            } : null,
-            heart_rate: hrData.length > 0 ? {
-              days: hrData.length,
-              avg_bpm: Math.round(hrData.reduce((a, b) => a + b.avg, 0) / hrData.length),
-              min_bpm: Math.round(Math.min(...hrData.map((d) => d.min))),
-              max_bpm: Math.round(Math.max(...hrData.map((d) => d.max))),
-            } : null,
+      // Strava
+      if (hasStravaCreds()) {
+        try {
+          const stravaClient = new StravaClient({
+            clientId: config.stravaClientId,
+            clientSecret: config.stravaClientSecret,
+            refreshToken: config.stravaRefreshToken,
+          });
+          const after = Math.floor(new Date(s).getTime() / 1000);
+          const before = Math.floor((new Date(e).getTime() + 86400_000) / 1000);
+          const activities = await stravaClient.getPaginated<StravaActivitySummary>(
+            "/athlete/activities",
+            { after, before },
+            3,
+            100
+          );
+          const totalDistance = activities.reduce((a, b) => a + (b.distance ?? 0), 0);
+          const totalTime = activities.reduce((a, b) => a + (b.moving_time ?? 0), 0);
+          const totalElev = activities.reduce((a, b) => a + (b.total_elevation_gain ?? 0), 0);
+          const byType: Record<string, number> = {};
+          for (const a of activities) byType[a.type] = (byType[a.type] ?? 0) + 1;
+          summary.strava = {
+            activity_count: activities.length,
+            total_distance_km: +(totalDistance / 1000).toFixed(1),
+            total_moving_time_hours: +(totalTime / 3600).toFixed(1),
+            total_elevation_gain_m: Math.round(totalElev),
+            by_type: byType,
           };
+        } catch (err) {
+          summary.strava = { error: String(err) };
         }
-      } catch {
-        // Apple Health cache not available, skip
+      }
+
+      // Apple Health (only when enabled)
+      if (config.appleHealthEnabled) {
+        try {
+          const ah = await loadAppleHealth();
+          if (ah) {
+            const db = ah.getDb();
+            const stepData = ah.aggregateRecords(db, {
+              recordType: "HKQuantityTypeIdentifierStepCount",
+              startDate: s,
+              endDate: e,
+              aggregation: "daily",
+            });
+            const hrData = ah.aggregateRecords(db, {
+              recordType: "HKQuantityTypeIdentifierHeartRate",
+              startDate: s,
+              endDate: e,
+              aggregation: "daily",
+            });
+            if (stepData.length > 0 || hrData.length > 0) {
+              summary.apple_health = {
+                steps: stepData.length > 0 ? {
+                  days: stepData.length,
+                  avg_daily: Math.round(stepData.reduce((a, b) => a + b.avg * b.count, 0) / stepData.length),
+                  total: Math.round(stepData.reduce((a, b) => a + b.avg * b.count, 0)),
+                } : null,
+                heart_rate: hrData.length > 0 ? {
+                  days: hrData.length,
+                  avg_bpm: Math.round(hrData.reduce((a, b) => a + b.avg, 0) / hrData.length),
+                  min_bpm: Math.round(Math.min(...hrData.map((d) => d.min))),
+                  max_bpm: Math.round(Math.max(...hrData.map((d) => d.max))),
+                } : null,
+              };
+            }
+          }
+        } catch {
+          // Apple Health cache not available, skip
+        }
       }
 
       return textResult(summary);
@@ -162,9 +243,9 @@ export function registerSummaryTools(server: McpServer): void {
 
   server.tool(
     "health_trends",
-    "Get trend analysis for a specific health metric over time",
+    "Get trend analysis for a specific metric over time. Supported: oura_sleep_score, oura_steps, oura_readiness_score, oura_activity_score, strava_distance, strava_elevation, or an Apple Health record type.",
     {
-      metric: z.string().describe("Metric to analyze (e.g. 'oura_sleep_score', 'oura_steps', 'HKQuantityTypeIdentifierHeartRate')"),
+      metric: z.string().describe("Metric to analyze"),
       start_date: z.string().optional().describe("Start date (YYYY-MM-DD). Defaults to 30 days ago."),
       end_date: z.string().optional().describe("End date (YYYY-MM-DD). Defaults to today."),
     },
@@ -177,7 +258,6 @@ export function registerSummaryTools(server: McpServer): void {
 
         if (metric.startsWith("oura_") && config.ouraToken) {
           const client = new OuraClient(config.ouraToken, config.ouraBaseUrl);
-
           if (metric === "oura_sleep_score") {
             const data = await client.getAll<Record<string, unknown>>("/v2/usercollection/daily_sleep", { start_date: startD, end_date: endD });
             dataPoints = data.filter((d) => d.score != null).map((d) => ({ date: d.day as string, value: d.score as number }));
@@ -191,35 +271,60 @@ export function registerSummaryTools(server: McpServer): void {
             const data = await client.getAll<Record<string, unknown>>("/v2/usercollection/daily_activity", { start_date: startD, end_date: endD });
             dataPoints = data.filter((d) => d.score != null).map((d) => ({ date: d.day as string, value: d.score as number }));
           }
-        } else {
-          // Treat as Apple Health record type
-          const db = getDb();
-          const aggregated = aggregateRecords(db, {
-            recordType: metric,
-            startDate: startD,
-            endDate: endD,
-            aggregation: "daily",
+        } else if (metric.startsWith("strava_") && hasStravaCreds()) {
+          const stravaClient = new StravaClient({
+            clientId: config.stravaClientId,
+            clientSecret: config.stravaClientSecret,
+            refreshToken: config.stravaRefreshToken,
           });
-          dataPoints = aggregated.map((d) => ({ date: d.period, value: d.avg }));
+          const after = Math.floor(new Date(startD).getTime() / 1000);
+          const before = Math.floor((new Date(endD).getTime() + 86400_000) / 1000);
+          const activities = await stravaClient.getPaginated<StravaActivitySummary>(
+            "/athlete/activities",
+            { after, before },
+            3,
+            100
+          );
+          // Group activities by date
+          const byDate = new Map<string, number>();
+          for (const a of activities) {
+            const date = a.start_date_local.slice(0, 10);
+            let v = 0;
+            if (metric === "strava_distance") v = a.distance / 1000;
+            else if (metric === "strava_elevation") v = a.total_elevation_gain;
+            else if (metric === "strava_moving_time") v = a.moving_time / 60;
+            byDate.set(date, (byDate.get(date) ?? 0) + v);
+          }
+          dataPoints = [...byDate.entries()].map(([date, value]) => ({ date, value }));
+        } else if (config.appleHealthEnabled) {
+          const ah = await loadAppleHealth();
+          if (ah) {
+            const db = ah.getDb();
+            const aggregated = ah.aggregateRecords(db, {
+              recordType: metric,
+              startDate: startD,
+              endDate: endD,
+              aggregation: "daily",
+            });
+            dataPoints = aggregated.map((d) => ({ date: d.period, value: d.avg }));
+          }
         }
 
         if (dataPoints.length === 0) {
           return textResult({ metric, message: "No data found for this metric and date range." });
         }
 
-        // Sort chronologically
         dataPoints.sort((a, b) => a.date.localeCompare(b.date));
 
         const values = dataPoints.map((d) => d.value);
         const avg = values.reduce((a, b) => a + b, 0) / values.length;
 
-        // Simple trend: compare first half avg to second half avg
         const mid = Math.floor(values.length / 2);
         const firstHalf = values.slice(0, mid);
         const secondHalf = values.slice(mid);
-        const firstAvg = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
-        const secondAvg = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
-        const changePercent = ((secondAvg - firstAvg) / firstAvg) * 100;
+        const firstAvg = firstHalf.length > 0 ? firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length : avg;
+        const secondAvg = secondHalf.length > 0 ? secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length : avg;
+        const changePercent = firstAvg !== 0 ? ((secondAvg - firstAvg) / firstAvg) * 100 : 0;
 
         let direction: string;
         if (Math.abs(changePercent) < 2) direction = "stable";

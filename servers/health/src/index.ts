@@ -44,7 +44,7 @@ if (mode === "http") {
 
     // Each request gets its own server+transport (stateless)
     const server = createMcpServer();
-    registerAllTools(server);
+    await registerAllTools(server);
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // stateless
