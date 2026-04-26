@@ -5,10 +5,10 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer } from "http";
 import { registerAllTools } from "./tools/index.js";
+import { applyCors, checkBearer, rateLimit } from "./middleware.js";
 
 const mode = process.argv.includes("--http") ? "http" : "stdio";
 const port = parseInt(process.env.PORT ?? "3000", 10);
-const API_KEY = process.env.MCP_API_KEY ?? "";
 
 function createMcpServer(): McpServer {
   return new McpServer(
@@ -29,18 +29,17 @@ function createMcpServer(): McpServer {
 if (mode === "http") {
   // Stateless HTTP mode for remote deployment
   const httpServer = createServer(async (req, res) => {
-    // CORS
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id");
+    applyCors(req, res);
     res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
 
     if (req.method === "OPTIONS") {
-      res.writeHead(204);
+      res.statusCode = 204;
       res.end();
       return;
     }
 
+    if (!rateLimit(req, res)) return;
+    if (!checkBearer(req, res)) return;
 
     // Each request gets its own server+transport (stateless)
     const server = createMcpServer();
@@ -62,9 +61,6 @@ if (mode === "http") {
 
   httpServer.listen(port, () => {
     console.error(`Health MCP server (HTTP) listening on port ${port}`);
-    if (!API_KEY) {
-      console.error("WARNING: No MCP_API_KEY set - server is unauthenticated!");
-    }
   });
 
   process.on("SIGINT", () => {

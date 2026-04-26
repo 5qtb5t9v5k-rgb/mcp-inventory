@@ -5,6 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer } from "http";
 import { registerTodoistTools } from "./tools/todoist-tools.js";
+import { applyCors, checkBearer, rateLimit } from "./middleware.js";
 
 const mode = process.argv.includes("--http") ? "http" : "stdio";
 const port = parseInt(process.env.PORT ?? "3000", 10);
@@ -34,16 +35,17 @@ function createMcpServer(): McpServer {
 
 if (mode === "http") {
   const httpServer = createServer(async (req, res) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id");
+    applyCors(req, res);
     res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
 
     if (req.method === "OPTIONS") {
-      res.writeHead(204);
+      res.statusCode = 204;
       res.end();
       return;
     }
+
+    if (!rateLimit(req, res)) return;
+    if (!checkBearer(req, res)) return;
 
     const server = createMcpServer();
     const transport = new StreamableHTTPServerTransport({

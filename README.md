@@ -15,12 +15,13 @@ Personal MCP (Model Context Protocol) server collection — custom AI tool serve
 │        │                │                     │             │
 └────────┼────────────────┼─────────────────────┼─────────────┘
          │                │                     │
-         │ HTTPS          │ HTTPS               │ stdio (local)
+         │ HTTPS+Bearer   │ HTTPS+Bearer        │ stdio (local)
          │                │                     │
 ┌────────┼────────────────┼─────────────────────┼─────────────┐
 │        ▼                ▼                     ▼             │
 │   ┌─────────────────────────┐   ┌──────────────────────┐   │
-│   │      Fly.io (remote)    │   │   Local MCP servers  │   │
+│   │   Fly.io (remote)       │   │   Local MCP servers  │   │
+│   │   + auth middleware     │   │   (no auth needed)   │   │
 │   │                         │   │                      │   │
 │   │  health-mcp-server      │   │  node health/dist/   │   │
 │   │  todoist-mcp-server     │   │  node todoist/dist/  │   │
@@ -270,9 +271,63 @@ Add custom connectors in claude.ai → Settings → Connectors:
 | MyHealthMCP | `https://health-mcp-server.fly.dev/` |
 | MyTodoist | `https://todoist-mcp-server.fly.dev/` |
 
+In the connector settings add the **Authorization header** with `Bearer <MCP_API_KEY>` (see Security below for how to look up or rotate the key).
+
 These are automatically available on iOS after configuring once.
 
 > Apple Health tools are not exposed over the remote URL — only Oura, Strava and the cross-source summaries.
+
+---
+
+## Security
+
+Both Fly-hosted servers are protected with three layers in `src/middleware.ts`:
+
+| Layer | Behavior |
+|-------|----------|
+| **Bearer auth** | Requires `Authorization: Bearer <MCP_API_KEY>` on every HTTP request. Compared with `timingSafeEqual`. Without `MCP_API_KEY` env var the server returns 503 (fail-closed) instead of serving openly. |
+| **CORS allowlist** | Only `claude.ai` (incl. subdomains) and `localhost:3000` are allowed origins. The previous `*` wildcard is gone. |
+| **Per-IP rate limit** | 60 requests / minute (token bucket, `Fly-Client-IP` aware). Returns 429 + `Retry-After`. Resets on machine restart — fine for personal use. |
+
+Local **stdio** mode bypasses all of this — middleware only runs on HTTP requests.
+
+### Look up or rotate the API key
+
+```bash
+# Look up current keys (stored in Fly secrets — values are NOT readable, only timestamps shown)
+fly secrets list -a health-mcp-server
+fly secrets list -a todoist-mcp-server
+
+# Rotate (this triggers a redeploy)
+fly secrets set MCP_API_KEY="$(openssl rand -base64 32)" -a health-mcp-server
+fly secrets set MCP_API_KEY="$(openssl rand -base64 32)" -a todoist-mcp-server
+
+# After rotating: update the Authorization header value in claude.ai connector settings
+```
+
+### Test it
+
+```bash
+# 401 without token
+curl -i https://health-mcp-server.fly.dev/ -X POST -d '{}'
+
+# 401 with wrong token
+curl -i https://health-mcp-server.fly.dev/ -X POST \
+  -H "Authorization: Bearer wrong" -d '{}'
+
+# 200 with correct token
+curl -i https://health-mcp-server.fly.dev/ -X POST \
+  -H "Authorization: Bearer $MCP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}'
+```
+
+### What this does **not** cover
+
+- Tokenin rotaatiota — kun rotatat, päivitä Fly-secret + claude.ai-connector samaan aikaan; downtimea tulee parin sekunnin verran kun machine käynnistyy uudella envillä.
+- DDoS — Fly:n edessä kannattaa Cloudflare / Tailscale Funnel jos haluat oikeasti rajata pääsyn omiin laitteisiin.
+- Lokitusta — middleware ei lokita Authorization-headeria, mutta jos lisäät debug-logituksia, varmista ettei header tai request body päädy lokeihin.
 
 ---
 
