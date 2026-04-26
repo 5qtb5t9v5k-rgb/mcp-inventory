@@ -25,20 +25,21 @@ Personal MCP (Model Context Protocol) server collection — custom AI tool serve
 │   │                         │   │                      │   │
 │   │  health-mcp-server      │   │  node health/dist/   │   │
 │   │  todoist-mcp-server     │   │  node todoist/dist/  │   │
+│   │  finance-mcp-jr         │   │  node finance/dist/  │   │
 │   └─────────────────────────┘   └──────────────────────┘   │
 │                                                             │
 │                      MCP Servers                            │
 └─────────────────────────────────────────────────────────────┘
-         │                │                │
-         ▼                ▼                ▼
-   ┌──────────┐    ┌──────────┐    ┌──────────┐
-   │ Oura API │    │ Strava   │    │ Todoist  │
-   │          │    │ API      │    │ API      │
-   └──────────┘    └──────────┘    └──────────┘
-                          ┌──────────────────┐
-                          │ Apple Health     │
-                          │ (opt-in, local)  │
-                          └──────────────────┘
+         │           │            │              │
+         ▼           ▼            ▼              ▼
+   ┌──────────┐ ┌────────┐ ┌──────────┐  ┌──────────────┐
+   │ Oura API │ │ Strava │ │ Todoist  │  │ Curve CSV    │
+   │          │ │ API    │ │ API      │  │ (uploaded)   │
+   └──────────┘ └────────┘ └──────────┘  └──────────────┘
+                                  ┌──────────────────┐
+                                  │ Apple Health     │
+                                  │ (opt-in, local)  │
+                                  └──────────────────┘
 ```
 
 ## Servers
@@ -99,6 +100,44 @@ Connects Claude to **Oura Ring** (sleep, activity, readiness), **Strava** (train
 - **Stateless HTTP** mode for Fly.io — no session timeouts, each request is independent
 - **Dual transport** — stdio for local (Claude Desktop/Code), HTTP for remote (claude.ai/iOS)
 - **Compact responses** — Strava raw payloads are huge (polylines, segments, photos); the MCP layer trims to LLM-friendly fields and converts m→km / s→min
+
+---
+
+### `servers/finance` — Personal Finance MCP Server
+
+Reads a Curve credit-card CSV export and exposes querying + aggregation tools. The categorization logic (English Curve categories → Finnish hierarchical categories with derived 2nd categories) is a TypeScript port of the rules in [`finance_notebook`](https://github.com/5qtb5t9v5k-rgb/finance_notebook).
+
+**Deployment:** `https://finance-mcp-jr.fly.dev/`
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                Finance MCP Server                        │
+│                                                          │
+│  ┌──────────────────┐    ┌─────────────────────────────┐ │
+│  │ Curve CSV parser │ →  │ Categorizer (Finnish rules) │ │
+│  │  - parse rows    │    │  - EN → FI category map     │ │
+│  │  - filter trash  │    │  - derive 2nd category      │ │
+│  │  - card mapping  │    │  - apply prefix rules       │ │
+│  └──────────────────┘    └─────────────────────────────┘ │
+│                                                          │
+│  PUT /<KEY>/upload   Upload a fresh Transactions.csv     │
+│                      from your laptop (curl script).     │
+│                      Stored on Fly volume at /data/.     │
+│                                                          │
+│  Tools (7):                                              │
+│  • finance_csv_status      • finance_top_merchants       │
+│  • finance_list_transactions  • finance_search           │
+│  • finance_summary         • finance_spend_trend         │
+│  • finance_categories                                    │
+└──────────────────────────────────────────────────────────┘
+```
+
+#### Why This Design
+
+- **CSV is the source of truth.** Curve has no public API, so each fresh export gets uploaded to the server via a tiny `upload.sh` script. The server stores it on a Fly volume.
+- **Categorization is pure logic, no DB.** All transforms run on each request. The CSV is small (a few thousand rows in a year), so this is fast. No state to manage.
+- **PUT /upload via the same auth.** The upload endpoint reuses the same Bearer / URL-path auth as the MCP transport, so the upload script is a one-liner curl.
+- **Server-side opinions match `finance_notebook`.** Same Finnish category names, same exclude rules, same card mapping. Tools return Finnish strings so the LLM can answer in Finnish naturally.
 
 ---
 
@@ -176,6 +215,24 @@ Strava only gives a refresh token via OAuth. One-time setup:
    ```
 5. Save the `refresh_token` — it's long-lived. The MCP server uses it to mint short-lived access tokens automatically.
 
+### Finance: Uploading Your Curve CSV
+
+The finance server reads from `/data/transactions.csv` on the Fly volume. Each time you download a fresh export from Curve:
+
+```bash
+# Save your latest export to ~/Desktop/Transactions.csv (default), then:
+cd servers/finance
+./upload.sh                            # uploads ~/Desktop/Transactions.csv
+
+# Or upload from a different path:
+./upload.sh ~/Downloads/Transactions.csv
+
+# Or use env vars instead of /tmp/finance_mcp_key.txt:
+FINANCE_MCP_KEY="..." FINANCE_MCP_URL="https://finance-mcp-jr.fly.dev" ./upload.sh
+```
+
+The script POSTs the file to `PUT /<MCP_API_KEY>/upload` and the server overwrites the volume file. Locally (stdio mode) the server just reads `~/Desktop/Transactions.csv` directly — no upload needed.
+
 ### Local Development
 
 ```bash
@@ -203,6 +260,13 @@ npm install
 npm run build
 TODOIST_API_TOKEN=xxx node dist/index.js           # stdio
 TODOIST_API_TOKEN=xxx node dist/index.js --http    # HTTP
+
+# Finance server (no external API, just reads a CSV)
+cd servers/finance
+npm install
+npm run build
+FINANCE_CSV_PATH=~/Desktop/Transactions.csv node dist/index.js          # stdio
+FINANCE_CSV_PATH=/data/transactions.csv node dist/index.js --http       # HTTP
 ```
 
 ### Deploy to Fly.io
@@ -221,6 +285,14 @@ npm run build && fly deploy
 cd servers/todoist
 fly secrets set TODOIST_API_TOKEN=xxx
 npm run build && fly deploy
+
+# Finance (first time setup)
+cd servers/finance
+fly apps create finance-mcp-jr                     # or your chosen name
+fly volumes create finance_data --region arn --size 1 -a finance-mcp-jr
+fly secrets set MCP_API_KEY="$(openssl rand -base64 32 | tr -d '=' | tr '/+' '_-')" -a finance-mcp-jr
+npm run build && fly deploy
+./upload.sh                                        # push your first CSV
 ```
 
 > Apple Health is intentionally **not** deployed remotely — it requires a local SQLite cache and the original XML export. Use stdio mode locally if you want it.
@@ -249,6 +321,13 @@ Add to `~/.claude/settings.json` (Claude Code) or
       "env": {
         "TODOIST_API_TOKEN": "your-token"
       }
+    },
+    "finance": {
+      "command": "/Users/you/.nvm/versions/node/v20.20.0/bin/node",
+      "args": ["/path/to/servers/finance/dist/index.js"],
+      "env": {
+        "FINANCE_CSV_PATH": "/Users/you/Desktop/Transactions.csv"
+      }
     }
   }
 }
@@ -270,6 +349,7 @@ Add custom connectors in claude.ai → Settings → Connectors. The **API key go
 |------|-----|
 | MyHealthMCP | `https://health-mcp-server.fly.dev/<MCP_API_KEY>/` |
 | MyTodoist | `https://todoist-mcp-server.fly.dev/<MCP_API_KEY>/` |
+| MyFinance | `https://finance-mcp-jr.fly.dev/<MCP_API_KEY>/` |
 
 Replace `<MCP_API_KEY>` with the actual key. Anyone with the URL has full access — treat it like a password and use HTTPS only.
 
