@@ -22,7 +22,23 @@ export function applyCors(req: IncomingMessage, res: ServerResponse): void {
   res.setHeader("Access-Control-Max-Age", "86400");
 }
 
-export function checkBearer(
+function constantTimeStringEqual(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a);
+  const bBuf = Buffer.from(b);
+  if (aBuf.length !== bBuf.length) return false;
+  return timingSafeEqual(aBuf, bBuf);
+}
+
+/**
+ * Validate auth from either:
+ *   1. Authorization: Bearer <key> header (preferred — Claude Desktop, curl, etc.)
+ *   2. URL path prefix /<key>/... (fallback — claude.ai custom connectors,
+ *      which only let you set the URL and don't support custom headers)
+ *
+ * On success, when path-auth was used, this rewrites req.url so the prefix
+ * is stripped before the request reaches the MCP transport.
+ */
+export function checkAuth(
   req: IncomingMessage,
   res: ServerResponse,
 ): boolean {
@@ -36,30 +52,43 @@ export function checkBearer(
     return false;
   }
 
+  // 1) Header auth
   const header = req.headers.authorization ?? "";
   const match = /^Bearer\s+(.+)$/.exec(header);
-  if (!match) {
-    res.statusCode = 401;
-    res.setHeader("WWW-Authenticate", 'Bearer realm="mcp"');
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: "Missing bearer token" }));
-    return false;
-  }
-
-  const provided = Buffer.from(match[1]);
-  const expected = Buffer.from(expectedKey);
-  if (
-    provided.length !== expected.length ||
-    !timingSafeEqual(provided, expected)
-  ) {
+  if (match) {
+    if (constantTimeStringEqual(match[1], expectedKey)) return true;
     res.statusCode = 401;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ error: "Invalid token" }));
     return false;
   }
 
-  return true;
+  // 2) URL path auth — first path segment must match the key
+  const url = req.url ?? "/";
+  // Allow trailing slash variants. Examples:
+  //   /KEY            → match, rewrite to /
+  //   /KEY/           → match, rewrite to /
+  //   /KEY/whatever   → match, rewrite to /whatever
+  const pathMatch = /^\/([^/?#]+)(\/.*)?(\?.*)?$/.exec(url);
+  if (pathMatch) {
+    const provided = decodeURIComponent(pathMatch[1]);
+    if (constantTimeStringEqual(provided, expectedKey)) {
+      const rest = pathMatch[2] ?? "/";
+      const query = pathMatch[3] ?? "";
+      req.url = rest + query;
+      return true;
+    }
+  }
+
+  res.statusCode = 401;
+  res.setHeader("WWW-Authenticate", 'Bearer realm="mcp"');
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify({ error: "Missing or invalid token (provide Bearer header or include key in URL path)" }));
+  return false;
 }
+
+/** @deprecated Use checkAuth instead — kept for backward compatibility. */
+export const checkBearer = checkAuth;
 
 type Bucket = { tokens: number; updated: number };
 const buckets = new Map<string, Bucket>();

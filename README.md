@@ -264,14 +264,14 @@ To enable Apple Health locally, add to the `env` block:
 
 ### Claude.ai / iOS (Remote)
 
-Add custom connectors in claude.ai → Settings → Connectors:
+Add custom connectors in claude.ai → Settings → Connectors. The **API key goes in the URL path** (claude.ai's custom-connector dialog only has fields for OAuth, no place for a custom Authorization header — the path-based variant works around this):
 
 | Name | URL |
 |------|-----|
-| MyHealthMCP | `https://health-mcp-server.fly.dev/` |
-| MyTodoist | `https://todoist-mcp-server.fly.dev/` |
+| MyHealthMCP | `https://health-mcp-server.fly.dev/<MCP_API_KEY>/` |
+| MyTodoist | `https://todoist-mcp-server.fly.dev/<MCP_API_KEY>/` |
 
-In the connector settings add the **Authorization header** with `Bearer <MCP_API_KEY>` (see Security below for how to look up or rotate the key).
+Replace `<MCP_API_KEY>` with the actual key. Anyone with the URL has full access — treat it like a password and use HTTPS only.
 
 These are automatically available on iOS after configuring once.
 
@@ -285,7 +285,7 @@ Both Fly-hosted servers are protected with three layers in `src/middleware.ts`:
 
 | Layer | Behavior |
 |-------|----------|
-| **Bearer auth** | Requires `Authorization: Bearer <MCP_API_KEY>` on every HTTP request. Compared with `timingSafeEqual`. Without `MCP_API_KEY` env var the server returns 503 (fail-closed) instead of serving openly. |
+| **Auth (two ways)** | The server accepts either:<br>1. `Authorization: Bearer <MCP_API_KEY>` header (preferred — Claude Desktop, curl)<br>2. Key as the first URL path segment, e.g. `https://...fly.dev/<KEY>/` (used for claude.ai custom connectors which can't set headers — the prefix is stripped before reaching the MCP transport)<br>Both compared with `timingSafeEqual`. Without `MCP_API_KEY` env var the server returns 503 (fail-closed). |
 | **CORS allowlist** | Only `claude.ai` (incl. subdomains) and `localhost:3000` are allowed origins. The previous `*` wildcard is gone. |
 | **Per-IP rate limit** | 60 requests / minute (token bucket, `Fly-Client-IP` aware). Returns 429 + `Retry-After`. Resets on machine restart — fine for personal use. |
 

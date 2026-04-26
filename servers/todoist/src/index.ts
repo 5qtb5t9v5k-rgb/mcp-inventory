@@ -5,7 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer } from "http";
 import { registerTodoistTools } from "./tools/todoist-tools.js";
-import { applyCors, checkBearer, rateLimit } from "./middleware.js";
+import { applyCors, checkAuth, rateLimit } from "./middleware.js";
 
 const mode = process.argv.includes("--http") ? "http" : "stdio";
 const port = parseInt(process.env.PORT ?? "3000", 10);
@@ -45,7 +45,7 @@ if (mode === "http") {
     }
 
     if (!rateLimit(req, res)) return;
-    if (!checkBearer(req, res)) return;
+    if (!checkAuth(req, res)) return;
 
     const server = createMcpServer();
     const transport = new StreamableHTTPServerTransport({
