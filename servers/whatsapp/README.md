@@ -117,6 +117,14 @@ Add to `~/.claude/settings.json` (Claude Code) or
 
 12 tools from upstream — `search_contacts`, `list_messages`, `list_chats`, `send_message`, `send_file`, `send_audio_message`, `download_media`, `get_message_context`, plus a few more. See the upstream README for the full list and arg schemas.
 
+## Scheduled triage (optional)
+
+`triage/` adds a daily WhatsApp triage that runs locally via launchd:
+reads the last 24 h of messages, classifies chats, and creates Todoist
+tasks (with reply drafts in the description) for anything that needs
+a response. **Never sends WhatsApp messages.** See
+[`triage/README.md`](triage/README.md).
+
 ## Operational notes
 
 - **Bridge must stay running** for messages to arrive in real time. If the Mac sleeps, the bridge reconnects on wake and whatsmeow backfills.

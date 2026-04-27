@@ -469,6 +469,24 @@ curl -i https://health-mcp-server.fly.dev/ -X POST \
 
 ---
 
+## Automation (Scheduled Workflows)
+
+Three scheduled Claude workflows are defined in [`automation/`](automation/):
+
+| ID | Name | Schedule | Where it runs | Sources |
+|----|------|----------|---------------|---------|
+| A | Morning brief | Weekdays 6:30 | claude.ai (Kairos cron) | Oura, Strava, Todoist |
+| C | Sunday review | Sun 19:00 | claude.ai (Kairos cron) | Oura, Strava, Finance, Todoist |
+| W | WhatsApp triage | Weekdays 18:00 | Mac mini (launchd) | WhatsApp, Todoist |
+
+A and C are pasted as prompts into claude.ai's Schedule dialog. W runs
+headless `claude -p` locally because the WhatsApp MCP is stdio-only.
+Output for W goes to Todoist tasks (label `whatsapp`) so it's visible
+on iOS without the desktop being awake. See
+[`automation/README.md`](automation/README.md) for details.
+
+---
+
 ## Adding a New Server
 
 1. Create `servers/<name>/` with the same structure as the others

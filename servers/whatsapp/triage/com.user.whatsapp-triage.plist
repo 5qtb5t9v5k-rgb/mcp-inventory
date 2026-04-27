@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.user.whatsapp-triage</string>
+
+    <!-- Polku: korvaa /Users/you omalla user dir:llä ennen launchctl loadia -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/you/code/mcp-inventory/servers/whatsapp/triage/run-triage.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/you/code/mcp-inventory</string>
+
+    <!-- Ajastus: arkisin klo 18:00. Muokkaa StartCalendarInterval-blockia
+         jos haluat eri aikoja. Useita aikoja = useita dict-blokkeja. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Weekday</key><integer>1</integer>
+            <key>Hour</key><integer>18</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>2</integer>
+            <key>Hour</key><integer>18</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>18</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>4</integer>
+            <key>Hour</key><integer>18</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>5</integer>
+            <key>Hour</key><integer>18</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+    </array>
+
+    <!-- Älä pidä elossa, vain ajasta — KeepAlive aiheuttaisi loopin -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/you/Library/Logs/whatsapp-triage.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/you/Library/Logs/whatsapp-triage.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>
