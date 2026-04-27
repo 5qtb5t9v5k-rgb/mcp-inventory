@@ -1,18 +1,48 @@
 # Automation
 
-Ajastetut Claude-työnkulut, jotka käyttävät tämän repon MCP-servereitä.
+Claude-työnkulut, jotka käyttävät tämän repon MCP-servereitä. Jokainen on saatavilla **kahta kautta**: ajastettuna (Kairos cron tai launchd) ja manuaalisena slash-komentona Claude Codessa.
 
 ## Yleiskuva
 
-| ID | Nimi | Aikataulu | Sijainti | Lähteet | Output |
-|----|------|-----------|----------|---------|--------|
-| A | Aamubrief | Ark. 6:30 | Kairos cron (claude.ai) | Oura, Strava, Todoist | Chat-viesti |
-| C | Sunnuntai-katsaus | Sun. 19:00 | Kairos cron (claude.ai) | Oura, Strava, Finance, Todoist | Chat-viesti |
-| W | WhatsApp-triage | Ark. 18:00 | launchd (Mac mini) | WhatsApp, Todoist | Tehtävät Todoistiin |
+| ID | Slash-komento | Ajastus | Sijainti | Lähteet | Output |
+|----|---------------|---------|----------|---------|--------|
+| A | `/aamubrief` | Ark. 6:30 | Kairos cron (claude.ai) | Oura, Strava, Todoist | Chat-viesti |
+| C | `/viikkokatsaus` | Sun. 19:00 | Kairos cron (claude.ai) | Oura, Strava, Finance, Todoist | Chat-viesti |
+| W | `/whatsapp-triage` | Ark. 18:00 | launchd (Mac mini) | WhatsApp, Todoist | Tehtävät Todoistiin |
 
-## A & C — Kairos cron (claude.ai)
+## Manuaalinen kutsu — Claude Code -slash-komennot
 
-Sekä `morning-brief.md` että `sunday-review.md` ovat valmiita prompteja, jotka kopioidaan claude.ai:n Schedule-toiminnon dialogiin:
+Slash-komentojen lähdekoodi on [`.claude/commands/`](../.claude/commands/) — ne ovat käytössä automaattisesti, kun käynnistät Claude Coden tämän repon hakemistosta:
+
+```bash
+cd ~/code/mcp-inventory
+claude
+# kirjoita prompt-kenttään:
+/aamubrief
+/viikkokatsaus
+/whatsapp-triage
+```
+
+Slash-komento on käytännössä sama prompti kuin ajastettu versio — Claude kutsuu työkalut ja vastaa keskusteluun. Tulet näkemään kaikki tool-callit jotka tehdään.
+
+### Käyttö globaalisti (mistä tahansa kansiosta)
+
+Jos haluat slash-komennot käyttöön mistä tahansa Claude Code -istunnosta, symlinkaa ne user-tasolle:
+
+```bash
+mkdir -p ~/.claude/commands
+ln -s ~/code/mcp-inventory/.claude/commands/aamubrief.md ~/.claude/commands/
+ln -s ~/code/mcp-inventory/.claude/commands/viikkokatsaus.md ~/.claude/commands/
+ln -s ~/code/mcp-inventory/.claude/commands/whatsapp-triage.md ~/.claude/commands/
+```
+
+Jälkimmäisen jälkeen Claude Code löytää komennot mistä tahansa working directorystä — kunhan tarvittavat MCP-serverit ovat käytössä siinä projektissa (tai user-tasolla).
+
+> **Claude.ai-web/iOS:** ei tue slash-komentoja. Siellä on kaksi reittiä: (1) liitä prompt-tiedoston sisältö viestikenttään, tai (2) käytä Schedule-toimintoa kerran (joka ajetaan saman tien).
+
+## A & C — Ajastettu Kairos cron (claude.ai)
+
+Promptien sisältö löytyy slash-komento-tiedostoista [`.claude/commands/aamubrief.md`](../.claude/commands/aamubrief.md) ja [`.claude/commands/viikkokatsaus.md`](../.claude/commands/viikkokatsaus.md). Kopioi promptin runko (frontmatter-blockin alapuolinen osa) claude.ai:n Schedule-toiminnon dialogiin:
 
 1. Avaa claude.ai
 2. Aloita uusi keskustelu

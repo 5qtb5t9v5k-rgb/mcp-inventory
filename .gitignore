@@ -4,4 +4,5 @@ dist/
 *.db
 .DS_Store
 apple_health_export/
-.claude/
+.claude/*
+!.claude/commands/

@@ -469,21 +469,25 @@ curl -i https://health-mcp-server.fly.dev/ -X POST \
 
 ---
 
-## Automation (Scheduled Workflows)
+## Automation (Scheduled & On-Demand Workflows)
 
-Three scheduled Claude workflows are defined in [`automation/`](automation/):
+Three Claude workflows defined in [`automation/`](automation/) and
+[`.claude/commands/`](.claude/commands/). Each is callable two ways:
+manually as a slash command in Claude Code, or scheduled.
 
-| ID | Name | Schedule | Where it runs | Sources |
-|----|------|----------|---------------|---------|
-| A | Morning brief | Weekdays 6:30 | claude.ai (Kairos cron) | Oura, Strava, Todoist |
-| C | Sunday review | Sun 19:00 | claude.ai (Kairos cron) | Oura, Strava, Finance, Todoist |
-| W | WhatsApp triage | Weekdays 18:00 | Mac mini (launchd) | WhatsApp, Todoist |
+| ID | Slash command | Schedule | Where scheduled run executes | Sources |
+|----|--------------|----------|------------------------------|---------|
+| A | `/aamubrief` | Weekdays 6:30 | claude.ai (Kairos cron) | Oura, Strava, Todoist |
+| C | `/viikkokatsaus` | Sun 19:00 | claude.ai (Kairos cron) | Oura, Strava, Finance, Todoist |
+| W | `/whatsapp-triage` | Weekdays 18:00 | Mac mini (launchd) | WhatsApp, Todoist |
 
-A and C are pasted as prompts into claude.ai's Schedule dialog. W runs
-headless `claude -p` locally because the WhatsApp MCP is stdio-only.
-Output for W goes to Todoist tasks (label `whatsapp`) so it's visible
-on iOS without the desktop being awake. See
-[`automation/README.md`](automation/README.md) for details.
+In Claude Code from this repo, type `/aamubrief`, `/viikkokatsaus`, or
+`/whatsapp-triage` to run any of them on demand. For scheduled runs:
+A and C are pasted into claude.ai's Schedule dialog; W runs headless
+`claude -p` locally because the WhatsApp MCP is stdio-only. W's output
+goes to Todoist tasks (label `whatsapp`) so it's visible on iOS without
+the desktop being awake. See [`automation/README.md`](automation/README.md)
+for details.
 
 ---
 
