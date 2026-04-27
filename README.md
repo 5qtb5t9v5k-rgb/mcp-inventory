@@ -26,7 +26,9 @@ Personal MCP (Model Context Protocol) server collection — custom AI tool serve
 │   │  health-mcp-server      │   │  node health/dist/   │   │
 │   │  todoist-mcp-server     │   │  node todoist/dist/  │   │
 │   │  finance-mcp-jr         │   │  node finance/dist/  │   │
-│   └─────────────────────────┘   └──────────────────────┘   │
+│   └─────────────────────────┘   │  whatsapp-bridge     │   │
+│                                 │  (Go) + uv MCP       │   │
+│                                 └──────────────────────┘   │
 │                                                             │
 │                      MCP Servers                            │
 └─────────────────────────────────────────────────────────────┘
@@ -36,10 +38,11 @@ Personal MCP (Model Context Protocol) server collection — custom AI tool serve
    │ Oura API │ │ Strava │ │ Todoist  │  │ Curve CSV    │
    │          │ │ API    │ │ API      │  │ (uploaded)   │
    └──────────┘ └────────┘ └──────────┘  └──────────────┘
-                                  ┌──────────────────┐
-                                  │ Apple Health     │
-                                  │ (opt-in, local)  │
-                                  └──────────────────┘
+                       ┌──────────────────┐  ┌────────────┐
+                       │ Apple Health     │  │ WhatsApp   │
+                       │ (opt-in, local)  │  │ (whatsmeow,│
+                       │                  │  │  local)    │
+                       └──────────────────┘  └────────────┘
 ```
 
 ## Servers
@@ -184,6 +187,47 @@ Our implementation uses **stateless HTTP** — no sessions, no timeouts.
 
 ---
 
+### `servers/whatsapp` — WhatsApp MCP Server (third-party, local-only)
+
+Wraps [`lharries/whatsapp-mcp`](https://github.com/lharries/whatsapp-mcp) — Go (`whatsmeow`) bridge + Python MCP that connects Claude to your **personal** WhatsApp account via the multidevice protocol.
+
+**Deployment:** local stdio only (Mac mini / always-on Mac). Not on Fly.io, not reachable from iOS Claude.
+
+```
+┌─────────────────────────────────────────────────────┐
+│              WhatsApp MCP (local)                   │
+│                                                     │
+│   ┌──────────────────┐      ┌────────────────────┐  │
+│   │  Go bridge       │      │  Python MCP (uv)   │  │
+│   │  (whatsmeow)     │─────▶│  reads SQLite,     │  │
+│   │  launchd-managed │      │  exposes tools     │  │
+│   │  ~20d QR re-auth │      │  via stdio         │  │
+│   └──────────────────┘      └────────────────────┘  │
+│            │                          │             │
+│            ▼                          ▼             │
+│   ┌──────────────────────────────────────────────┐  │
+│   │  ~/code/whatsapp-mcp/whatsapp-bridge/store/  │  │
+│   │  (SQLite — messages, chats, session creds)   │  │
+│   └──────────────────────────────────────────────┘  │
+│                                                     │
+│  Tools (12): search_contacts, list_messages,        │
+│  list_chats, send_message, send_file,               │
+│  send_audio_message, download_media,                │
+│  get_message_context, …                             │
+└─────────────────────────────────────────────────────┘
+```
+
+#### Why Local-Only
+
+- **Stateful session**: WhatsApp credentials + SQLite live on disk and must persist on a single machine — doesn't fit the stateless-HTTP Fly.io pattern.
+- **QR re-pair every ~20 days**: requires terminal access to the host to scan a fresh code.
+- **TOS grey area**: residential `whatsmeow` use is the lowest-risk profile.
+- **Source not vendored**: upstream is its own Go + Python codebase. This repo only carries setup notes (`servers/whatsapp/README.md`) and a launchd plist.
+
+> Path forward for iOS access: `loglux/whatsapp-mcp-stream` (TypeScript + Streamable HTTP + Baileys) on Fly.io with a persistent volume. Same auth middleware as Health/Todoist would slot in front. Not implemented yet — see `servers/whatsapp/README.md`.
+
+---
+
 ## Setup
 
 ### Prerequisites
@@ -267,6 +311,9 @@ npm install
 npm run build
 FINANCE_CSV_PATH=~/Desktop/Transactions.csv node dist/index.js          # stdio
 FINANCE_CSV_PATH=/data/transactions.csv node dist/index.js --http       # HTTP
+
+# WhatsApp server — see servers/whatsapp/README.md
+# (third-party upstream cloned separately, not in this repo)
 ```
 
 ### Deploy to Fly.io
@@ -296,6 +343,8 @@ npm run build && fly deploy
 ```
 
 > Apple Health is intentionally **not** deployed remotely — it requires a local SQLite cache and the original XML export. Use stdio mode locally if you want it.
+>
+> WhatsApp follows the same local-only pattern (stateful whatsmeow session + on-disk SQLite + ~20d QR re-pair). See `servers/whatsapp/README.md` for setup.
 
 ### Claude Desktop / Claude Code Configuration
 
@@ -328,6 +377,15 @@ Add to `~/.claude/settings.json` (Claude Code) or
       "env": {
         "FINANCE_CSV_PATH": "/Users/you/Desktop/Transactions.csv"
       }
+    },
+    "whatsapp": {
+      "command": "/Users/you/.local/bin/uv",
+      "args": [
+        "--directory",
+        "/Users/you/code/whatsapp-mcp/whatsapp-mcp-server",
+        "run",
+        "main.py"
+      ]
     }
   }
 }
