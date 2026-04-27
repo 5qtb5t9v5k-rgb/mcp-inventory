@@ -32,6 +32,33 @@ go build -o whatsapp-bridge .
 
 `go build` produces a binary so launchd doesn't need the Go toolchain at runtime.
 
+### Upstream patches (required as of 2026-04)
+
+Upstream `lharries/whatsapp-mcp` is stale — it pins a March 2025 `whatsmeow` version which WhatsApp now rejects with `405 (client outdated)`, and its code uses the pre-`context.Context` whatsmeow API. After cloning, apply these patches:
+
+```bash
+cd ~/code/whatsapp-mcp/whatsapp-bridge
+
+# 1. Update whatsmeow + transitive deps
+go get -u go.mau.fi/whatsmeow
+go mod tidy
+
+# 2. Add context.Background() to 5 call sites that the new whatsmeow API requires
+cp main.go main.go.bak
+sed -i '' '644s/client\.Download(/client.Download(context.Background(), /' main.go
+sed -i '' '803s/sqlstore\.New(/sqlstore.New(context.Background(), /' main.go
+sed -i '' '810s/container\.GetFirstDevice()/container.GetFirstDevice(context.Background())/' main.go
+sed -i '' '976s/client\.GetGroupInfo(/client.GetGroupInfo(context.Background(), /' main.go
+sed -i '' '991s/\.GetContact(/.GetContact(context.Background(), /' main.go
+
+# 3. Build
+go build -o whatsapp-bridge .
+```
+
+Line numbers may drift in future upstream commits — if `sed` no-ops or `go build` still fails, find the call sites by searching for `client.Download(`, `sqlstore.New(`, `container.GetFirstDevice()`, `client.GetGroupInfo(`, `.GetContact(` and add `context.Background()` as the first argument.
+
+> If upstream eventually merges these changes, this section can be deleted. As long as it's needed, treat it as part of the install.
+
 ## First-time pairing
 
 Run the bridge once in a terminal so you can see the QR:
@@ -93,7 +120,9 @@ Add to `~/.claude/settings.json` (Claude Code) or
 ## Operational notes
 
 - **Bridge must stay running** for messages to arrive in real time. If the Mac sleeps, the bridge reconnects on wake and whatsmeow backfills.
+- **REST API on :8080**: the bridge exposes a local REST API for the Python MCP. If startup logs `bind: address already in use`, an old bridge is still running — `pkill -f whatsapp-bridge` and retry.
 - **~20-day re-pair**: when the bridge logs "qr code expired" / disconnects, run it foreground once to scan a fresh QR.
 - **Backup**: `~/code/whatsapp-mcp/whatsapp-bridge/store/` contains the session and message history. Lose it = re-pair + history gone.
 - **No Fly.io**: this server is not deployed remotely. iOS Claude cannot reach it.
 - **Not in this repo's source tree**: upstream is its own codebase. Pin a commit if you want reproducibility (`cd ~/code/whatsapp-mcp && git rev-parse HEAD`).
+- **Upstream is stale**: see the patches section above. Re-apply on each fresh clone until lharries merges fixes.
